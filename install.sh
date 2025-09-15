@@ -55,6 +55,7 @@ main() {
     install_commands
     install_orchestrator
     install_hooks
+    install_business_os
     install_documentation
     
     # Configure environment
@@ -151,7 +152,12 @@ install_core_system() {
     "mcp": {
         "enabled": true,
         "auto_selection": true,
-        "servers": ["context7", "sequential", "magic", "playwright"]
+        "servers": {
+            "project-memory": {
+                "command": "python",
+                "args": ["$CLAUDE_HOME/mcp/servers/project-memory-server.py"]
+            }
+        }
     },
     "orchestration": {
         "enabled": true,
@@ -166,6 +172,74 @@ install_core_system() {
     "notifications": {
         "voice": true,
         "batman_theme": true
+    },
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python $CLAUDE_HOME/hooks/pre_tool_use/safety_guard.py"
+                    },
+                    {
+                        "type": "command",
+                        "command": "python $CLAUDE_HOME/hooks/pre_tool_use/context_validator.py"
+                    }
+                ]
+            }
+        ],
+        "PostToolUse": [
+            {
+                "matcher": "Write|Edit|MultiEdit",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python $CLAUDE_HOME/hooks/post_tool_use/auto_format.py"
+                    }
+                ]
+            },
+            {
+                "matcher": ".*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python $CLAUDE_HOME/hooks/post_tool_use/progress_tracker.py"
+                    },
+                    {
+                        "type": "command",
+                        "command": "python $CLAUDE_HOME/hooks/post_tool_use/business_memory_updater.py"
+                    }
+                ]
+            }
+        ],
+        "Notification": [
+            {
+                "matcher": ".*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python $CLAUDE_HOME/hooks/notification/voice_notify.py"
+                    }
+                ]
+            }
+        ],
+        "Stop": [
+            {
+                "matcher": ".*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python $CLAUDE_HOME/hooks/stop/session_logger.py"
+                    }
+                ]
+            }
+        ]
+    },
+    "env": {
+        "CLAUDE_DANGEROUS_MODE": "true",
+        "CLAUDE_AUTO_COMMIT": "false",
+        "CLAUDE_PARALLEL_ENABLED": "true"
     }
 }
 EOF
@@ -246,6 +320,69 @@ install_hooks() {
     echo -e "${GRAY}[INFO]${NC} Hooks installed"
 }
 
+install_business_os() {
+    echo -e "${GRAY}[INFO]${NC} Installing Business OS components..."
+    
+    # Create business-specific directories
+    mkdir -p "$CLAUDE_HOME/memory"
+    mkdir -p "$CLAUDE_HOME/context"
+    
+    # Copy business commands
+    echo -e "${GRAY}[INFO]${NC} Installing business executive commands..."
+    for cmd in cmo.md cfo.md cpo.md briefing.md; do
+        if [[ -f "$REPO_DIR/commands/$cmd" ]]; then
+            cp "$REPO_DIR/commands/$cmd" "$CLAUDE_HOME/commands/"
+        fi
+    done
+    
+    # Copy business context files
+    if [[ -d "$REPO_DIR/context" ]]; then
+        echo -e "${GRAY}[INFO]${NC} Installing business context files..."
+        cp -r "$REPO_DIR/context/"* "$CLAUDE_HOME/context/" 2>/dev/null || true
+    fi
+    
+    # Install project memory MCP server
+    echo -e "${GRAY}[INFO]${NC} Installing project memory server..."
+    if [[ -f "$REPO_DIR/mcp/project-memory-server.py" ]]; then
+        cp "$REPO_DIR/mcp/project-memory-server.py" "$CLAUDE_HOME/mcp/servers/"
+        chmod +x "$CLAUDE_HOME/mcp/servers/project-memory-server.py"
+    fi
+    
+    # Install business memory updater hook
+    echo -e "${GRAY}[INFO]${NC} Installing business memory updater..."
+    if [[ -f "$REPO_DIR/hooks/post_tool_use/business_memory_updater.py" ]]; then
+        cp "$REPO_DIR/hooks/post_tool_use/business_memory_updater.py" "$CLAUDE_HOME/hooks/post_tool_use/"
+        chmod +x "$CLAUDE_HOME/hooks/post_tool_use/business_memory_updater.py"
+    fi
+    
+    # Create sample .env file if not exists
+    if [[ ! -f "$REPO_DIR/.env" ]]; then
+        echo -e "${GRAY}[INFO]${NC} Creating sample .env file..."
+        cat > "$REPO_DIR/.env" << 'EOF'
+# Business API Keys (add your actual keys)
+
+# Marketing (Instagram Business API)
+INSTAGRAM_ACCESS_TOKEN=your_token_here
+
+# Revenue (Stripe)
+STRIPE_API_KEY=sk_live_your_key_here
+
+# Analytics (Mixpanel)
+MIXPANEL_PROJECT_TOKEN=your_token_here
+MIXPANEL_API_SECRET=your_secret_here
+
+# Alternative Analytics (PostHog)
+POSTHOG_API_KEY=your_key_here
+POSTHOG_PROJECT_ID=your_project_id
+
+# Support (Intercom)
+INTERCOM_ACCESS_TOKEN=your_token_here
+EOF
+    fi
+    
+    echo -e "${GRAY}[INFO]${NC} Business OS components installed"
+}
+
 install_documentation() {
     echo -e "${GRAY}[INFO]${NC} Installing documentation..."
     
@@ -311,6 +448,34 @@ alias batman='claude'
 alias batcave='cd $CLAUDE_HOME'
 alias alfred='claude /help'
 alias wayne='claude /personas status'
+
+# Business OS Memory Functions
+store_memory() {
+    python -c "
+import sys
+sys.path.append('$CLAUDE_HOME/mcp/servers')
+from project_memory_server import store_memory
+store_memory('$1')
+"
+}
+
+recall_memory() {
+    python -c "
+import sys
+sys.path.append('$CLAUDE_HOME/mcp/servers')
+from project_memory_server import recall_memory
+recall_memory('$1')
+"
+}
+
+get_project_context() {
+    python -c "
+import sys
+sys.path.append('$CLAUDE_HOME/mcp/servers')
+from project_memory_server import get_project_context
+get_project_context()
+"
+}
 EOF
         
         echo -e "${GRAY}[INFO]${NC} Shell configuration updated"
@@ -352,6 +517,28 @@ run_installation_tests() {
         return 1
     fi
     
+    # Test Business OS components
+    if [[ -f "$CLAUDE_HOME/mcp/servers/project-memory-server.py" ]]; then
+        echo -e "${GRAY}[INFO]${NC}   ✓ Project memory server installed"
+    else
+        echo -e "${YELLOW}[ERROR]${NC}   ✗ Project memory server missing"
+        return 1
+    fi
+    
+    if [[ -f "$CLAUDE_HOME/hooks/post_tool_use/business_memory_updater.py" ]]; then
+        echo -e "${GRAY}[INFO]${NC}   ✓ Business memory updater installed"
+    else
+        echo -e "${YELLOW}[ERROR]${NC}   ✗ Business memory updater missing"
+        return 1
+    fi
+    
+    if [[ -f "$CLAUDE_HOME/commands/cmo.md" ]] && [[ -f "$CLAUDE_HOME/commands/cfo.md" ]]; then
+        echo -e "${GRAY}[INFO]${NC}   ✓ Business commands installed"
+    else
+        echo -e "${YELLOW}[ERROR]${NC}   ✗ Business commands missing"
+        return 1
+    fi
+    
     echo -e "${GRAY}[INFO]${NC} All tests passed"
 }
 
@@ -378,6 +565,12 @@ show_completion_message() {
     echo -e "• ${YELLOW}claude /architect 'system design'${NC} - Architecture design"
     echo -e "• ${YELLOW}claude /ui 'component description'${NC} - UI component generation"
     echo -e "• ${YELLOW}claude /review security --fix${NC} - Security review with fixes"
+    echo
+    echo -e "${WHITE}Business OS commands:${NC}"
+    echo -e "• ${YELLOW}claude /cmo \"analyze marketing\"${NC} - Chief Marketing Officer"
+    echo -e "• ${YELLOW}claude /cfo \"check runway\"${NC} - Chief Financial Officer"
+    echo -e "• ${YELLOW}claude /cpo \"product metrics\"${NC} - Chief Product Officer"
+    echo -e "• ${YELLOW}claude /briefing${NC} - Daily business intelligence"
     echo
     echo -e "${YELLOW}🦇 Welcome to Wayne Enterprises. Let's protect Gotham's codebase!${NC}"
     echo -e "${GRAY}═══════════════════════════════════════${NC}"
